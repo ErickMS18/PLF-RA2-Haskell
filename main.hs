@@ -1,7 +1,8 @@
 import qualified Data.Map as Map
-import Data.Time (UTCTime)
+import Data.Time.Clock (UTCTime, getCurrentTime)
 import Data.Maybe (isJust)
-
+import System.Directory (doesFileExist)
+import Control.Exception (catch, IOException)
 
 -------------------------------------------------
 -- Dados
@@ -115,41 +116,206 @@ updateQty time id novaQtd (Inventario mapa)
 
 
 
---------------------------------------------------------------------------------------
--- I/O
---------------------------------------------------------------------------------------
+-------------------------alunos 3 e 4: eu ceci eba--------------------
 
-{- 
-Teste da serialização (read.show)
-Pra testar, tira o trecho abaixo de comentario e roda o código
+
+logsDeErro :: [LogEntry] -> [LogEntry]
+logsDeErro = filter (\l -> case status l of Falha _ -> True; _ -> False)
+
+historicoPorItem :: String -> [LogEntry] -> [LogEntry]
+historicoPorItem idItem = filter (\logE -> case acao logE of
+    Add i       -> itemID i == idItem
+    Remove iID  -> iID == idItem
+    Update i    -> itemID i == idItem
+    _           -> False)
+
+itemMaisMovimentado :: [LogEntry] -> Maybe String
+itemMaisMovimentado [] = Nothing
+itemMaisMovimentado logs =
+    let nomes = [ case acao l of
+                    Add i      -> nome i
+                    Remove id  ->
+                        case [nome i | LogEntry _ (Add i) _ _ <- logs, itemID i == id] of
+                            (n:_) -> n
+                            []    -> "<desconhecido>"
+                    Update i   -> nome i
+                    _          -> "" | l <- logs ]
+
+        contagem = Map.fromListWith (+) [(n, 1) | n <- nomes, n /= ""]
+
+    in if Map.null contagem
+        then Nothing
+        else
+            let lista = Map.toList contagem
+                (itemMax, _) = foldr1 (\x y -> if snd x > snd y then x else y) lista
+            in Just itemMax
+
+-----------------------------main e loop----------------------------
+
 
 main :: IO ()
 main = do
-    let item = Item "10" "Suco de Goiaba" 3 "Consumivel"
-    let itemSerializado = show item
-    putStrLn ("Serializado: " ++ itemSerializado)
+    putStrLn "=== Sistema de Inventário ==="
 
-    let itemDesserializado = read itemSerializado :: Item
-    putStrLn ("Desserializado: " ++ show itemDesserializado)
+    -- Tenta ler o inventário salvo no arquivo, se existir;
+    -- caso contrário, inicia com um inventário vazio.
+    conteudoInventario <- catch (readFile "Inventario.dat") 
+                                (\(_ :: IOException) -> return (show (Inventario Map.empty)))
+    let inventario = read conteudoInventario :: Inventario
 
-    putStrLn ("São iguais? " ++ show (item == itemDesserializado))
--}
+    -- Garante que o arquivo de log exista
+    existe <- doesFileExist "Auditoria.log"
+    if not existe then writeFile "Auditoria.log" "" else return ()
 
-main :: IO ()
-main = do
-    -- Criando um inventário de exemplo
-    let inv = Inventario (Map.fromList
-            [ ("1", Item "1" "Suco de Goiaba" 5 "Consumível")
-            , ("2", Item "2" "Colar de Santo" 1 "Amuleto")
-            ])
+    -- Inicia o loop principal
+    loop inventario
 
-    -- SALVAR o inventário no disco
-    writeFile "inventario.txt" (show inv)
-    putStrLn "Inventário salvo no arquivo inventario.txt"
 
-    -- CARREGAR o inventário do disco
-    conteudo <- readFile "inventario.txt"
-    let invCarregado = read conteudo :: Inventario
+loop :: Inventario -> IO ()
+loop inventario = do
+    putStrLn "\n=== MENU ==="
+    putStrLn "Escolha uma opção: "
+    putStrLn "1 - Adicionar item"
+    putStrLn "2 - Remover item"
+    putStrLn "3 - Atualizar quantidade"
+    putStrLn "4 - Report"
+    putStrLn "5 - Listar itens do inventário"
+    putStrLn "0 - Sair"
+    
+    opcao <- getLine
+    case opcao of
+    
+    
+    --- apesar do ID ser string aqui é filtrado pra ser numero pra mostrar uma mensagem de erro
+    --- q nao seja a "item não encontrado para atualização" (no opção 3 por exemplo), pq o erro nao é q nao foi encontrado, foi q o id nao pode ser uma letra
+    --- e dai a quantidade nao é string, é numero e se a pessao digitasse algo q nao fosse numero o programa
+    --- parava de rodar, entao é feita uma filtragem pra quando a pessoa digitar ser numero, se nao for, nm chga no read
+    --- (é no read q dava erro pq ele tentava ler um valor numerico e era letra e parava de rodar), dai mostra uma mnesagem de erro
+    --- e reinicia o loop
+    --- fiz isso pro 1,2 e 3
+    
+        "1" -> do
+            putStrLn "\nDigite: id nome quantidade categoria"
+            putStrLn "(Atenção: use _ no lugar de espaços e digite números para id e quantidade)"
+            entrada <- getLine
+            let ws = words entrada
+            case ws of
+                (id:nome:qtd:cat:_)
+                    | all (`elem` "0123456789") id && all (`elem` "0123456789") qtd -> do
+                        t <- getCurrentTime
+                        let item = Item id nome (read qtd) cat
+                        case addItem t item inventario of
+                        
+                            Left e -> do
+                                appendFile "Auditoria.log" (show (LogEntry t (QueryFail e) e (Falha e)) ++ "\n")
+                                putStrLn e
+                                loop inventario
+                            
+                            Right (novo, logE) -> do
+                                writeFile "Inventario.dat" (show novo)
+                                appendFile "Auditoria.log" (show logE ++ "\n")
+                                putStrLn "Operação realizada com sucesso."
+                                loop novo
 
-    putStrLn "\nInventário carregado do arquivo:"
-    print invCarregado
+                        
+                        
+                _ -> do
+                    putStrLn "\nEntrada inválida. Use o formato: id nome quantidade categoria"
+                    putStrLn "Exemplo: 3 batata_frita 90 comida"
+                    loop inventario
+                    
+        "2" -> do
+            putStrLn "\nDigite: id quantidade"
+            putStrLn "(Atenção: digite nùmeros para id e quantidade)"
+            entrada <- getLine
+            let ws = words entrada
+            case ws of
+                [id, qtd]
+                    | all (`elem` "0123456789") id && all (`elem` "0123456789") qtd -> do
+                        t <- getCurrentTime
+                        let qtdNum = read qtd
+                        
+                        case removeItem t id qtdNum inventario of
+                            Left e -> do
+                                appendFile "Auditoria.log" (show (LogEntry t (QueryFail e) e (Falha e)) ++ "\n")
+                                putStrLn e
+                                loop inventario
+                        
+                            Right (novo, logE) -> do
+                                writeFile "Inventario.dat" (show novo)
+                                appendFile "Auditoria.log" (show logE ++ "\n")
+                                putStrLn "Operação realizada com sucesso."
+                                loop novo
+                        
+                _ -> do
+                    putStrLn "\nEntrada inválida. Use o formato: id quantidade"
+                    putStrLn "Exemplo: 4 500"
+                    loop inventario
+
+        "3" -> do
+            putStrLn "\nDigite: id novaQuantidade"
+            putStrLn "(Atenção: digite nùmeros para id e quantidade)"
+            entrada <- getLine
+            let ws = words entrada
+            case ws of
+                [id, novaQtd]
+                    | all (`elem` "0123456789") id && all (`elem` "0123456789") novaQtd -> do
+                        t <- getCurrentTime
+                        let novaQtdNum = read novaQtd
+                        
+                        case updateQty t id novaQtdNum inventario of
+                            Left e -> do
+                                appendFile "Auditoria.log" (show (LogEntry t (QueryFail e) e (Falha e)) ++ "\n")
+                                putStrLn e
+                                loop inventario
+                        
+                            Right (novo, logE) -> do
+                                writeFile "Inventario.dat" (show novo)
+                                appendFile "Auditoria.log" (show logE ++ "\n")
+                                putStrLn "Operação realizada com sucesso."
+                                loop novo
+
+                        
+                _ -> do
+                    putStrLn "\nEntrada inválida. Use o formato: id novaQuantidade"
+                    putStrLn "Exemplo: 2 10"
+                    loop inventario
+
+        "4" -> do
+            conteudo <- readFile "Auditoria.log"
+            let logs = map read (lines conteudo) :: [LogEntry]
+
+            putStrLn "\n--- Logs de Erro ---"
+            mapM_ print (logsDeErro logs)
+
+            putStrLn "\n--- Item mais movimentado ---"
+            case itemMaisMovimentado logs of
+                Nothing -> putStrLn "Nenhum item movimentado ainda."
+                Just nomeItem -> putStrLn nomeItem
+
+            putStrLn "\nDigite o ID do item para ver o histórico:"
+            idItem <- getLine
+            let historico = historicoPorItem idItem logs
+            if null historico
+                then putStrLn "Nenhum histórico encontrado para esse item."
+                else do
+                    putStrLn ("\n--- Histórico do item " ++ idItem ++ " ---")
+                    mapM_ print historico
+
+            loop inventario
+
+
+
+        ----“Executar um comando de ‘listar’ (a ser criado)":  
+        "5" -> do
+            putStrLn "\n--- Itens no Inventário ---"
+            if Map.null (itens inventario)
+                then putStrLn "Inventário vazio."
+                else mapM_ (\(k, i) ->
+                    putStrLn (k ++ ": " ++ nome i ++ " | Quantidade: " ++ show (quantidade i) ++ " | Categoria: " ++ categoria i)
+                    ) (Map.toList (itens inventario))
+            loop inventario
+
+        "0" -> putStrLn "Encerrando o programa."
+        _   -> putStrLn "Opção inválida." >> loop inventario
+
