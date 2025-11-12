@@ -1,6 +1,7 @@
 import qualified Data.Map as Map
 import Data.Time.Clock (UTCTime, getCurrentTime)
 import Data.Maybe (isJust)
+import Data.List (isInfixOf)
 import System.Directory (doesFileExist)
 import Control.Exception (catch, IOException)
 
@@ -48,86 +49,81 @@ data Inventario = Inventario
 -- O resultado de uma operação vai retornar o inventário e a entrada no log que descreve a operação
 type ResultadoOperacao = (Inventario, LogEntry)
 
--- Adicionar item
+-- Adicionar item: cria um novo item no inventário
 -- Recebe o horário, um item, e o inventário; retorna uma string em caso de erro ou ResultadoOperacao em caso de successo
 -- Retorna erro caso um item com o mesmo ID já existe no inventário ou se a quantidade é negativa
 addItem :: UTCTime -> Item -> Inventario -> Either String ResultadoOperacao
-addItem time item (Inventario mapa)
+addItem horario item (Inventario mapa)
     | Map.member (itemID item) mapa =
-        Left "Erro: item já existe no inventário."
+        Left "ERRO: o item ja existe no inventario"
     | quantidade item < 0 =
-        Left "Erro: quantidade inicial não pode ser negativa."
+        Left "ERRO: a quantidade nao pode ser negativa"
     | otherwise =
         let novoMapa = Map.insert (itemID item) item mapa
-            entradaLog = LogEntry time
+            entradaLog = LogEntry horario
                             (Add item)
                             ("Item adicionado: " ++ nome item)
-                            (Sucesso "Operação concluída com sucesso.")
+                            (Sucesso "Item adicionado com sucesso")
         in Right (Inventario novoMapa, entradaLog)
 
 
--- Remover item
--- Recebe horário, item, quantidade (int) e inventário; retorna string em caso de erro ou ResultadoOperacao em caso de sucesso
--- Retorna erro se a quantidade for zero ou negativa, se o item não existe no inventário, ou se a quantidade removida for maior do que o estoque
-removeItem :: UTCTime -> String -> Int -> Inventario -> Either String ResultadoOperacao
-removeItem time id qtd (Inventario mapa)
-    | qtd <= 0 =
-        Left "Erro: a quantidade removida deve ser positiva."
-    | otherwise =
-        case Map.lookup id mapa of
-            Nothing ->
-                Left "Erro: item não encontrado no inventário."
-            Just item
-                | quantidade item < qtd ->
-                    Left "Erro: estoque insuficiente."
-                | otherwise ->
-                    let novaQtd = quantidade item - qtd
-                        novoMapa =
-                            if novaQtd == 0
-                                then Map.delete id mapa
-                                else Map.insert id (item { quantidade = novaQtd }) mapa
-                        logE = LogEntry time
-                                        (Remove id)
-                                        ("Removidas " ++ show qtd ++ " unidades de " ++ nome item)
-                                        (Sucesso "Remoção concluída com sucesso.")
-                    in Right (Inventario novoMapa, logE)
+-- Remover item: remove um item do inventário
+-- Recebe horário, item, ID do item e inventário; retorna string em caso de erro ou ResultadoOperacao em caso de sucesso
+-- Retorna erro se o item não existe no inventário
+removeItem :: UTCTime -> String -> Inventario -> Either String ResultadoOperacao
+removeItem horario id (Inventario mapa) =
+    case Map.lookup id mapa of
+        Nothing ->
+            Left "ERRO: item nao existe no inventario"
+        Just item ->
+            let novoMapa = Map.delete id mapa
+                entradaLog = LogEntry horario
+                                (Remove id)
+                                ("Item removido: " ++ nome item)
+                                (Sucesso "Item removido com sucesso")
+            in Right (Inventario novoMapa, entradaLog)
 
 
--- Atualizar quantidade
+
+-- Atualizar quantidade: muda o estoque do item no inventário
 -- Recebe horário, ID do item (string), quantidade (int), e inventário; retorna string em caso de erro e ResultadoOperacao em caso de sucesso
 -- Retorna erro se quantidade for negativa ou se o item não for encontrado
 updateQty :: UTCTime -> String -> Int -> Inventario -> Either String ResultadoOperacao
-updateQty time id novaQtd (Inventario mapa)
+updateQty horario id novaQtd (Inventario mapa)
     | novaQtd < 0 =
-        Left "Erro: quantidade não pode ser negativa."
+        Left "ERRO: quantidade nao pode ser negativa"
     | otherwise =
         case Map.lookup id mapa of
             Nothing ->
-                Left "Erro: item não encontrado para atualização."
+                Left "ERRO: item nao existe no inventario"
             Just item ->
                 let itemAtualizado = item { quantidade = novaQtd }
                     novoMapa = Map.insert id itemAtualizado mapa
-                    logE = LogEntry time
+                    entradaLog = LogEntry horario
                                     (Update itemAtualizado)
-                                    ("Quantidade atualizada para " ++ show novaQtd ++ " em " ++ nome item)
-                                    (Sucesso "Atualização concluída com sucesso.")
-                in Right (Inventario novoMapa, logE)
+                                    ("Quantidade atualizada para " ++ show novaQtd ++ " em: " ++ nome item)
+                                    (Sucesso "Quantidade atualizada com sucesso")
+                in Right (Inventario novoMapa, entradaLog)
 
 
 
 
--------------------------alunos 3 e 4: eu ceci eba--------------------
+-------------------------------------------------------------------------------------
+-- Logs e relatórios
+-------------------------------------------------------------------------------------
 
 
 logsDeErro :: [LogEntry] -> [LogEntry]
 logsDeErro = filter (\l -> case status l of Falha _ -> True; _ -> False)
 
 historicoPorItem :: String -> [LogEntry] -> [LogEntry]
-historicoPorItem idItem = filter (\logE -> case acao logE of
-    Add i       -> itemID i == idItem
-    Remove iID  -> iID == idItem
-    Update i    -> itemID i == idItem
-    _           -> False)
+historicoPorItem idItem =
+    filter (\entrada -> case acao entrada of
+        Add i       -> itemID i == idItem
+        Remove iID  -> iID == idItem
+        Update i    -> itemID i == idItem
+        QueryFail _ -> ("ID: " ++ idItem) `isInfixOf` detalhes entrada
+        )
 
 itemMaisMovimentado :: [LogEntry] -> Maybe String
 itemMaisMovimentado [] = Nothing
@@ -149,8 +145,23 @@ itemMaisMovimentado logs =
             let lista = Map.toList contagem
                 (itemMax, _) = foldr1 (\x y -> if snd x > snd y then x else y) lista
             in Just itemMax
+            
+            
+-- mini função auxiliar que cria uma entrada de log
+criarLog :: UTCTime -> AcaoLog -> String -> StatusLog -> LogEntry
+criarLog horario acao descricao status =
+    LogEntry
+        { timestamp = horario
+        , acao = acao
+        , detalhes = descricao
+        , status = status
+        }
 
------------------------------main e loop----------------------------
+
+
+-------------------------------------------------------------------------------------
+-- Main
+-------------------------------------------------------------------------------------
 
 
 main :: IO ()
@@ -207,14 +218,15 @@ loop inventario = do
                         case addItem t item inventario of
                         
                             Left e -> do
-                                appendFile "Auditoria.log" (show (LogEntry t (QueryFail e) e (Falha e)) ++ "\n")
+                                let logErro = criarLog t (QueryFail "Erro ao adicionar item") ("ID: " ++ id ++ ", Nome: " ++ nome) (Falha e)
+                                appendFile "Auditoria.log" (show logErro ++ "\n")
                                 putStrLn e
                                 loop inventario
                             
-                            Right (novo, logE) -> do
+                            Right (novo, entradaLog) -> do
                                 writeFile "Inventario.dat" (show novo)
-                                appendFile "Auditoria.log" (show logE ++ "\n")
-                                putStrLn "Operação realizada com sucesso."
+                                appendFile "Auditoria.log" (show entradaLog ++ "\n")
+                                putStrLn "Item adicionado com sucesso"
                                 loop novo
 
                         
@@ -225,32 +237,30 @@ loop inventario = do
                     loop inventario
                     
         "2" -> do
-            putStrLn "\nDigite: id quantidade"
-            putStrLn "(Atenção: digite nùmeros para id e quantidade)"
+            putStrLn "\nDigite: id"
+            putStrLn "(Atenção: o ID deve ser numérico)"
             entrada <- getLine
-            let ws = words entrada
-            case ws of
-                [id, qtd]
-                    | all (`elem` "0123456789") id && all (`elem` "0123456789") qtd -> do
-                        t <- getCurrentTime
-                        let qtdNum = read qtd
-                        
-                        case removeItem t id qtdNum inventario of
-                            Left e -> do
-                                appendFile "Auditoria.log" (show (LogEntry t (QueryFail e) e (Falha e)) ++ "\n")
-                                putStrLn e
-                                loop inventario
-                        
-                            Right (novo, logE) -> do
-                                writeFile "Inventario.dat" (show novo)
-                                appendFile "Auditoria.log" (show logE ++ "\n")
-                                putStrLn "Operação realizada com sucesso."
-                                loop novo
-                        
-                _ -> do
-                    putStrLn "\nEntrada inválida. Use o formato: id quantidade"
-                    putStrLn "Exemplo: 4 500"
-                    loop inventario
+        
+            -- validar input (id numerico)
+            if all (`elem` "0123456789") entrada then do
+                t <- getCurrentTime
+        
+                case removeItem t entrada inventario of
+                    Left e -> do
+                        let logErro = criarLog t (QueryFail "Erro ao remover item") ("ID: " ++ entrada) (Falha e)
+                        appendFile "Auditoria.log" (show logErro ++ "\n")
+                        putStrLn e
+                        loop inventario
+        
+                    Right (novo, entradaLog) -> do
+                        writeFile "Inventario.dat" (show novo)
+                        appendFile "Auditoria.log" (show entradaLog ++ "\n")
+                        putStrLn "Item removido com sucesso"
+                        loop novo
+        
+            else do
+                putStrLn "\nEntrada inválida. O ID deve conter apenas números."
+                loop inventario
 
         "3" -> do
             putStrLn "\nDigite: id novaQuantidade"
@@ -265,14 +275,15 @@ loop inventario = do
                         
                         case updateQty t id novaQtdNum inventario of
                             Left e -> do
-                                appendFile "Auditoria.log" (show (LogEntry t (QueryFail e) e (Falha e)) ++ "\n")
+                                let logErro = criarLog t (QueryFail "Erro ao alterar quantidade") ("ID: " ++ id ++ ", quantidade: " ++ novaQtd) (Falha e)
+                                appendFile "Auditoria.log" (show logErro ++ "\n")
                                 putStrLn e
                                 loop inventario
                         
-                            Right (novo, logE) -> do
+                            Right (novo, entradaLog) -> do
                                 writeFile "Inventario.dat" (show novo)
-                                appendFile "Auditoria.log" (show logE ++ "\n")
-                                putStrLn "Operação realizada com sucesso."
+                                appendFile "Auditoria.log" (show entradaLog ++ "\n")
+                                putStrLn "Quantidade atualizada com sucesso"
                                 loop novo
 
                         
@@ -290,14 +301,14 @@ loop inventario = do
 
             putStrLn "\n--- Item mais movimentado ---"
             case itemMaisMovimentado logs of
-                Nothing -> putStrLn "Nenhum item movimentado ainda."
+                Nothing -> putStrLn "Nenhum item movimentado ainda"
                 Just nomeItem -> putStrLn nomeItem
 
             putStrLn "\nDigite o ID do item para ver o histórico:"
             idItem <- getLine
             let historico = historicoPorItem idItem logs
             if null historico
-                then putStrLn "Nenhum histórico encontrado para esse item."
+                then putStrLn "Nenhum histórico encontrado para esse item"
                 else do
                     putStrLn ("\n--- Histórico do item " ++ idItem ++ " ---")
                     mapM_ print historico
@@ -306,16 +317,14 @@ loop inventario = do
 
 
 
-        ----“Executar um comando de ‘listar’ (a ser criado)":  
         "5" -> do
             putStrLn "\n--- Itens no Inventário ---"
             if Map.null (itens inventario)
-                then putStrLn "Inventário vazio."
+                then putStrLn "Inventário vazio"
                 else mapM_ (\(k, i) ->
                     putStrLn (k ++ ": " ++ nome i ++ " | Quantidade: " ++ show (quantidade i) ++ " | Categoria: " ++ categoria i)
                     ) (Map.toList (itens inventario))
             loop inventario
 
-        "0" -> putStrLn "Encerrando o programa."
-        _   -> putStrLn "Opção inválida." >> loop inventario
-
+        "0" -> putStrLn "Encerrando o programa"
+        _   -> putStrLn "Opção inválida" >> loop inventario
