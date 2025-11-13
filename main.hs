@@ -67,7 +67,7 @@ addItem horario item (Inventario mapa)
         in Right (Inventario novoMapa, entradaLog)
 
 
--- Remover item: remove um item do inventário
+-- Remover item: remove um item completamente do inventário
 -- Recebe horário, item, ID do item e inventário; retorna string em caso de erro ou ResultadoOperacao em caso de sucesso
 -- Retorna erro se o item não existe no inventário
 removeItem :: UTCTime -> String -> Inventario -> Either String ResultadoOperacao
@@ -84,6 +84,24 @@ removeItem horario id (Inventario mapa) =
             in Right (Inventario novoMapa, entradaLog)
 
 
+-- Reduz a quantide de um item (para cumprir com os requisitos)
+-- Consideramos isso uma operação de atualizar a quantidade, portanto retorna a ação Update
+-- Recebe horário, ID do item, quantidade e inventário; retorna string em caso de erro ou ResultadoOperacao em caso de sucesso
+-- Retorna erro caso a quantidade seja negativa, caso o item não exista, ou caso não exista estoque o suficiente
+sellItem :: UTCTime -> String -> Int -> Inventario -> Either String ResultadoOperacao
+sellItem horario id qtd (Inventario mapa)
+    | qtd <= 0 =
+        Left "ERRO: a quantidade vendida deve ser positiva."
+    | otherwise =
+        case Map.lookup id mapa of
+            Nothing ->
+                Left "ERRO: item não encontrado no inventário."
+            Just item ->
+                let estoqueAtual = quantidade item
+                    novaQtd = estoqueAtual - qtd
+                in if novaQtd < 0
+                    then Left "ERRO: estoque insuficiente para a venda."
+                    else updateQty horario id novaQtd (Inventario mapa)
 
 -- Atualizar quantidade: muda o estoque do item no inventário
 -- Recebe horário, ID do item (string), quantidade (int), e inventário; retorna string em caso de erro e ResultadoOperacao em caso de sucesso
@@ -157,7 +175,24 @@ criarLog horario acao descricao status =
         , status = status
         }
 
+-- funções auxiliares para imprimir entradas de log e ações de forma mais legível
+imprimirLogEntry :: LogEntry -> String
+imprimirLogEntry (LogEntry timestamp acao detalhes status) =
+    unwords
+        [ show timestamp
+        , "|"
+        , imprimirAcao acao
+        , "|"
+        , detalhes
+        , "|"
+        , show(status)
+        ]
 
+imprimirAcao :: AcaoLog -> String
+imprimirAcao (Add item) = "Adição (ID: " ++ itemID item ++ ", nome: " ++ nome item ++ ", quantidade: " ++ show (quantidade item) ++ ", categoria: " ++ categoria item ++ ")"
+imprimirAcao (Remove id) = "Remoção (ID: " ++ id ++ ")"
+imprimirAcao (Update item) = "Atualização (ID: " ++ itemID item ++ ", nome: " ++ nome item ++ ", quantidade: " ++ show (quantidade item) ++ ", categoria: " ++ categoria item ++ ")"
+imprimirAcao (QueryFail msg) = "Erro: " ++ msg
 
 -------------------------------------------------------------------------------------
 -- Main
@@ -174,7 +209,7 @@ main = do
                                 (\(_ :: IOException) -> return (show (Inventario Map.empty)))
     let inventario = read conteudoInventario :: Inventario
 
-    -- Garante que o arquivo de log exista
+    -- Garante que o arquivo de log exista e lê o arquivo
     existe <- doesFileExist "Auditoria.log"
     if not existe then writeFile "Auditoria.log" "" else return ()
 
@@ -191,6 +226,7 @@ loop inventario = do
     putStrLn "3 - Atualizar quantidade"
     putStrLn "4 - Report"
     putStrLn "5 - Listar itens do inventário"
+    putStrLn "6 - Vender item"
     putStrLn "0 - Sair"
     
     opcao <- getLine
@@ -297,7 +333,7 @@ loop inventario = do
             let logs = map read (lines conteudo) :: [LogEntry]
 
             putStrLn "\n--- Logs de Erro ---"
-            mapM_ print (logsDeErro logs)
+            mapM_ (putStrLn . imprimirLogEntry) (logsDeErro logs)
 
             putStrLn "\n--- Item mais movimentado ---"
             case itemMaisMovimentado logs of
@@ -311,7 +347,7 @@ loop inventario = do
                 then putStrLn "Nenhum histórico encontrado para esse item"
                 else do
                     putStrLn ("\n--- Histórico do item " ++ idItem ++ " ---")
-                    mapM_ print historico
+                    mapM_ (putStrLn . imprimirLogEntry) historico
 
             loop inventario
 
@@ -325,6 +361,34 @@ loop inventario = do
                     putStrLn (k ++ ": " ++ nome i ++ " | Quantidade: " ++ show (quantidade i) ++ " | Categoria: " ++ categoria i)
                     ) (Map.toList (itens inventario))
             loop inventario
+            
+        "6" -> do
+            putStrLn "\nDigite: id quantidade_vendida"
+            putStrLn "(Atenção: digite números para id e quantidade)"
+            entrada <- getLine
+            let ws = words entrada
+            case ws of
+                [id, qtd]
+                    | all (`elem` "0123456789") id && all (`elem` "0123456789") qtd -> do
+                        tempo <- getCurrentTime
+                        let qtdNum = read qtd
+                        case sellItem tempo id qtdNum inventario of
+                            Left erro -> do
+                                let logE = LogEntry tempo (QueryFail "Erro ao vender item")
+                                                    ("ID: " ++ id)
+                                                    (Falha erro)
+                                appendFile "Auditoria.log" (show logE ++ "\n")
+                                putStrLn erro
+                                loop inventario
+                            Right (novo, logE) -> do
+                                writeFile "Inventario.dat" (show novo)
+                                appendFile "Auditoria.log" (show logE ++ "\n")
+                                putStrLn "Venda registrada com sucesso."
+                                loop novo
+                _ -> do
+                    putStrLn "\nEntrada inválida. Use o formato: id quantidade_vendida"
+                    putStrLn "Exemplo: 3 5"
+                    loop inventario
 
         "0" -> putStrLn "Encerrando o programa"
         _   -> putStrLn "Opção inválida" >> loop inventario
