@@ -48,8 +48,8 @@ Seguem abaixo os testes feitos conforme a especificação.
 ![iniciando o programa sem arquivos](imagensHaskell/teste1.1.png)
 
 ### Passo 2: Adicionar 3 itens.
-![adicionando 3 itens](imagensHaskell/teste1.2.1.png)
-![adicionando 3 itens](imagensHaskell/teste1.2.2.png)
+![adicionando 3 itens](teste1.2.1.png)
+![adicionando 3 itens](./teste1.2.2.png)
 
 ### Passo 3: Fechar o programa.
 ![fechando o programa](imagensHaskell/teste1.3.png)
