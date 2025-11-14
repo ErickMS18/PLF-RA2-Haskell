@@ -130,9 +130,21 @@ updateQty horario id novaQtd (Inventario mapa)
 -- Logs e relatórios
 -------------------------------------------------------------------------------------
 
+-- Filtra apenas as entradas onde o status é falha.
+-- A função percorre todos os LogEntry e mantém somente aqueles
+-- onde o status é falha (Falha _). Então são retornados apenas erros registrados no log.
 
 logsDeErro :: [LogEntry] -> [LogEntry]
 logsDeErro = filter (\l -> case status l of Falha _ -> True; _ -> False)
+
+
+-- Aqui são retornadas todas as entradas de log relacionadas a um item específico.
+-- é verificado o campo "acao" de cada log,
+-- no "Add", o log pertence ao item se itemID i for igual ao idItem, 
+-- no "Remove", pertence se o ID removido for igual ao ID buscado,
+-- no "Update", pertence se itemID i for igual ao idItem,
+-- e no "QueryFail", como os erros não têm ID associado, procura o ID dentro da string `detalhes`,
+-- assim, são retornados todas as ações ou erros que mencionam o item.
 
 historicoPorItem :: String -> [LogEntry] -> [LogEntry]
 historicoPorItem idItem =
@@ -142,6 +154,15 @@ historicoPorItem idItem =
         Update i    -> itemID i == idItem
         QueryFail _ -> ("ID: " ++ idItem) `isInfixOf` detalhes entrada
         )
+
+
+-- Aqui é determinado qual item aparece mais vezes nos logs.
+-- Para cada LogEntry, um nome é extraído,
+-- para o "Add" e o "Update" é usado o nome i,para o "Remove",
+-- ele tenta descobrir o nome procurando um Add anterior com o mesmo IDe se não encontrar
+-- marca como "<desconhecido>".
+-- Depois disso são contadas quantas vezes cada nome aparece usando "Map.fromListWith (+)".
+-- Então o item com maior frequência é considerado o item mais movimentado.
 
 itemMaisMovimentado :: [LogEntry] -> Maybe String
 itemMaisMovimentado [] = Nothing
@@ -233,13 +254,9 @@ loop inventario = do
     case opcao of
     
     
-    --- apesar do ID ser string aqui é filtrado pra ser numero pra mostrar uma mensagem de erro
-    --- q nao seja a "item não encontrado para atualização" (no opção 3 por exemplo), pq o erro nao é q nao foi encontrado, foi q o id nao pode ser uma letra
-    --- e dai a quantidade nao é string, é numero e se a pessao digitasse algo q nao fosse numero o programa
-    --- parava de rodar, entao é feita uma filtragem pra quando a pessoa digitar ser numero, se nao for, nm chga no read
-    --- (é no read q dava erro pq ele tentava ler um valor numerico e era letra e parava de rodar), dai mostra uma mnesagem de erro
-    --- e reinicia o loop
-    --- fiz isso pro 1,2 e 3
+-- No 1, 2 e 3 a quantidade (ou outro campo como ID, nova quantidade) está sendo tratada para aceitar apenas um numeral,
+-- evitando que o programa quebre ao usar read em valores inválidos.
+-- Uma mensagem de erro é mostrada e o loop é reiniciado
     
         "1" -> do
             putStrLn "\nDigite: id nome quantidade categoria"
@@ -392,3 +409,5 @@ loop inventario = do
 
         "0" -> putStrLn "Encerrando o programa"
         _   -> putStrLn "Opção inválida" >> loop inventario
+        
+        
